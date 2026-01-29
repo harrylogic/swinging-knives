@@ -3,20 +3,26 @@
 <head>
   <meta charset="utf-8" />
   <title>Swinging Knives</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
   <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
   <style>
-    body { margin:0; background:#000; }
+    body { margin:0; background:#000; touch-action:none; }
     canvas { display:block; margin:0 auto; }
   </style>
 </head>
 <body>
 <script>
+const W = 960, H = 540;
+
 const config = {
   type: Phaser.AUTO,
-  width: 960,
-  height: 540,
+  width: W,
+  height: H,
   backgroundColor: "#0b0b0f",
+  scale: {
+    mode: Phaser.Scale.FIT,         // fits on mobile screens
+    autoCenter: Phaser.Scale.CENTER_BOTH
+  },
   physics: {
     default: "arcade",
     arcade: { gravity: { y: 1100 }, debug: false }
@@ -30,6 +36,11 @@ let player, ground, finish, cursors;
 let knives = [];
 let spawn = { x: 80, y: 390 };
 let canHit = true;
+
+// Touch state
+let touchLeft = false;
+let touchRight = false;
+let touchJump = false;
 
 function sayOhYeah() {
   try {
@@ -45,73 +56,72 @@ function preload(){}
 function create() {
   cursors = this.input.keyboard.createCursorKeys();
 
-  // --- Generate textures (draw lifelike-ish shapes) ---
   generateKnifeTexture(this);
   generatePersonTexture(this);
 
-  // Subtle stars / noise background vibe
+  // Background speckles
   const bg = this.add.graphics();
   for (let i=0;i<140;i++){
-    const x = Phaser.Math.Between(0, config.width);
-    const y = Phaser.Math.Between(0, config.height);
-    const a = Phaser.Math.FloatBetween(0.1, 0.6);
-    bg.fillStyle(0xffffff, a);
-    bg.fillCircle(x, y, Phaser.Math.Between(1,2));
+    bg.fillStyle(0xffffff, Phaser.Math.FloatBetween(0.1, 0.5));
+    bg.fillCircle(Phaser.Math.Between(0, W), Phaser.Math.Between(0, H), Phaser.Math.Between(1,2));
   }
 
   // Ground
-  ground = this.add.rectangle(480, 505, 960, 70, 0x1e1e28);
+  ground = this.add.rectangle(W/2, H-35, W, 70, 0x1e1e28);
   this.physics.add.existing(ground, true);
 
-  // Finish line
-  finish = this.add.rectangle(920, 330, 18, 240, 0x18ff7b);
+  // Finish
+  finish = this.add.rectangle(W-40, H-210, 18, 260, 0x18ff7b);
   this.physics.add.existing(finish, true);
 
-  // Player (person sprite)
+  // Player
   player = this.physics.add.sprite(spawn.x, spawn.y, "person");
   player.setCollideWorldBounds(true);
-  player.body.setSize(22, 44).setOffset(21, 10); // tighter hitbox than the art
+  player.body.setSize(22, 44).setOffset(21, 10);
 
   this.physics.add.collider(player, ground);
 
-  // Knives (swingers)
+  // Knives
   addSwingKnife(this, 300, 110, 120, 2.1, 55);
   addSwingKnife(this, 520, 110, 160, 1.6, 70);
   addSwingKnife(this, 730, 130, 120, 2.7, 60);
+  addGroundKnife(this, 610, H-70);
 
-  // Optional low “ground knife” you jump over
-  addGroundKnife(this, 610, 470);
-
-  // Overlaps
+  // Collisions
   knives.forEach(k => this.physics.add.overlap(player, k.body, () => hitPlayer(this)));
   this.physics.add.overlap(player, finish, () => win(this));
 
-  this.add.text(12, 10, "Arrows: move/jump • Avoid knives • Reach green line",
+  // HUD
+  this.add.text(12, 10, "Mobile: use on-screen buttons • Desktop: arrows",
     { fontFamily:"system-ui, Arial", fontSize:"14px", color:"#eaeaea" });
 
-  // store for update
+  // Create touch controls
+  createTouchControls(this);
+
+  // store
   this.knives = knives;
 }
 
 function update(time, deltaMs) {
-  const speed = 240;
+  const speed = 260;
 
-  // movement
-  if (cursors.left.isDown) player.setVelocityX(-speed);
-  else if (cursors.right.isDown) player.setVelocityX(speed);
+  // Desktop keyboard OR mobile touch
+  const left = cursors.left.isDown || touchLeft;
+  const right = cursors.right.isDown || touchRight;
+
+  if (left) player.setVelocityX(-speed);
+  else if (right) player.setVelocityX(speed);
   else player.setVelocityX(0);
 
-  // jump
-  if (cursors.up.isDown && player.body.blocked.down) player.setVelocityY(-540);
-
-  // tiny run “bob” animation
-  if (Math.abs(player.body.velocity.x) > 10 && player.body.blocked.down) {
-    player.setScale(1, 1 + Math.sin(time / 60) * 0.02);
-  } else {
-    player.setScale(1, 1);
+  // Jump (tap)
+  const wantJump = (Phaser.Input.Keyboard.JustDown(cursors.up) || touchJump);
+  if (wantJump && player.body.blocked.down) {
+    player.setVelocityY(-560);
   }
+  // Reset one-tap jump so holding doesn't spam
+  touchJump = false;
 
-  // update swinging knives
+  // Knife swing update
   for (const k of this.knives) {
     if (!k.swing) continue;
     k.t += deltaMs / 1000;
@@ -120,15 +130,20 @@ function update(time, deltaMs) {
     const x = k.px + Math.sin(ang) * k.len;
     const y = k.py + Math.cos(ang) * k.len;
 
-    // chain line
     k.chain.setTo(k.px, k.py, x, y);
     k.chainGfx.clear();
     k.chainGfx.lineStyle(2, 0x8f8f9a, 0.9);
     k.chainGfx.strokeLineShape(k.chain);
 
-    // move knife
     k.body.setPosition(x, y);
-    k.body.setRotation(ang); // rotate knife with swing
+    k.body.setRotation(ang);
+  }
+
+  // little run bob
+  if (Math.abs(player.body.velocity.x) > 10 && player.body.blocked.down) {
+    player.setScale(1, 1 + Math.sin(time / 60) * 0.02);
+  } else {
+    player.setScale(1, 1);
   }
 }
 
@@ -136,7 +151,10 @@ function hitPlayer(scene) {
   if (!canHit) return;
   canHit = false;
 
+  // speech often needs user interaction on mobile:
+  // pressing buttons counts, so this should work after first tap
   sayOhYeah();
+
   scene.cameras.main.shake(120, 0.01);
 
   scene.time.delayedCall(220, () => {
@@ -148,43 +166,77 @@ function hitPlayer(scene) {
 
 function win(scene) {
   scene.physics.pause();
-  scene.add.rectangle(480, 250, 520, 170, 0x000000, 0.7);
-  scene.add.text(480, 235, "YOU WIN", { fontFamily:"system-ui, Arial", fontSize:"46px", color:"#ffffff" }).setOrigin(0.5);
-  scene.add.text(480, 290, "Refresh to play again", { fontFamily:"system-ui, Arial", fontSize:"16px", color:"#dddddd" }).setOrigin(0.5);
+
+  // SAY IT when you win
+  sayOhYeah();
+
+  // Extra polish: slight delay + second "Oh yeah!" for emphasis
+  scene.time.delayedCall(350, () => {
+    sayOhYeah();
+  });
+
+  scene.add.rectangle(W/2, H/2, 520, 170, 0x000000, 0.7);
+  scene.add.text(W/2, H/2 - 10, "YOU WIN",
+    { fontFamily:"system-ui, Arial", fontSize:"46px", color:"#ffffff" }).setOrigin(0.5);
+  scene.add.text(W/2, H/2 + 45, "Refresh to play again",
+    { fontFamily:"system-ui, Arial", fontSize:"16px", color:"#dddddd" }).setOrigin(0.5);
 }
 
-// --- Knife + Person textures (drawn in code) ---
+/* -----------------------------
+   Touch Controls UI
+----------------------------- */
+function createTouchControls(scene) {
+  // Big translucent buttons
+  const btnStyle = (label) => ({
+    fontFamily: "system-ui, Arial",
+    fontSize: "22px",
+    color: "#ffffff"
+  });
+
+  // Left button
+  const leftBg = scene.add.rectangle(110, H-90, 180, 140, 0x000000, 0.35).setScrollFactor(0);
+  const leftTxt = scene.add.text(110, H-90, "LEFT", btnStyle()).setOrigin(0.5).setScrollFactor(0);
+
+  leftBg.setInteractive({ useHandCursor: true });
+  leftBg.on("pointerdown", () => { touchLeft = true; });
+  leftBg.on("pointerup", () => { touchLeft = false; });
+  leftBg.on("pointerout", () => { touchLeft = false; });
+
+  // Right button
+  const rightBg = scene.add.rectangle(320, H-90, 180, 140, 0x000000, 0.35).setScrollFactor(0);
+  const rightTxt = scene.add.text(320, H-90, "RIGHT", btnStyle()).setOrigin(0.5).setScrollFactor(0);
+
+  rightBg.setInteractive({ useHandCursor: true });
+  rightBg.on("pointerdown", () => { touchRight = true; });
+  rightBg.on("pointerup", () => { touchRight = false; });
+  rightBg.on("pointerout", () => { touchRight = false; });
+
+  // Jump button
+  const jumpBg = scene.add.rectangle(W-130, H-95, 220, 150, 0x00ff66, 0.22).setScrollFactor(0);
+  const jumpTxt = scene.add.text(W-130, H-95, "JUMP", btnStyle()).setOrigin(0.5).setScrollFactor(0);
+
+  jumpBg.setInteractive({ useHandCursor: true });
+  jumpBg.on("pointerdown", () => { touchJump = true; });
+
+  // Make sure multitouch works (left + jump, etc.)
+  scene.input.addPointer(2);
+}
+
+/* -----------------------------
+   Generated textures
+----------------------------- */
 function generateKnifeTexture(scene) {
   const g = scene.make.graphics({ x:0, y:0, add:false });
-
-  // Canvas for knife texture
   const w = 90, h = 26;
-  g.clear();
 
-  // Handle
-  g.fillStyle(0x2d2d2d, 1);
-  g.fillRoundedRect(4, 8, 20, 10, 4);
+  g.fillStyle(0x2d2d2d, 1); g.fillRoundedRect(4, 8, 20, 10, 4);     // handle
+  g.fillStyle(0x8a6f3d, 1); g.fillRoundedRect(22, 6, 6, 14, 3);     // guard
 
-  // Guard
-  g.fillStyle(0x8a6f3d, 1);
-  g.fillRoundedRect(22, 6, 6, 14, 3);
-
-  // Blade (polygon)
   g.fillStyle(0xd7dbe2, 1);
-  g.beginPath();
-  g.moveTo(28, 6);
-  g.lineTo(84, 13);
-  g.lineTo(28, 20);
-  g.closePath();
-  g.fillPath();
+  g.beginPath(); g.moveTo(28, 6); g.lineTo(84, 13); g.lineTo(28, 20); g.closePath(); g.fillPath();
 
-  // Blade edge highlight
   g.lineStyle(2, 0xffffff, 0.35);
-  g.beginPath();
-  g.moveTo(30, 7);
-  g.lineTo(82, 13);
-  g.lineTo(30, 19);
-  g.strokePath();
+  g.beginPath(); g.moveTo(30, 7); g.lineTo(82, 13); g.lineTo(30, 19); g.strokePath();
 
   g.generateTexture("knife", w, h);
   g.destroy();
@@ -192,38 +244,28 @@ function generateKnifeTexture(scene) {
 
 function generatePersonTexture(scene) {
   const g = scene.make.graphics({ x:0, y:0, add:false });
-
   const w = 64, h = 64;
-  g.clear();
 
-  // Head
-  g.fillStyle(0xf1c27d, 1);
-  g.fillCircle(32, 14, 9);
-
-  // Body (shirt)
-  g.fillStyle(0x3ea1ff, 1);
-  g.fillRoundedRect(24, 24, 16, 20, 6);
-
-  // Arms
-  g.fillStyle(0xf1c27d, 1);
-  g.fillRoundedRect(18, 26, 8, 10, 4);
+  g.fillStyle(0xf1c27d, 1); g.fillCircle(32, 14, 9);               // head
+  g.fillStyle(0x3ea1ff, 1); g.fillRoundedRect(24, 24, 16, 20, 6);   // shirt
+  g.fillStyle(0xf1c27d, 1); g.fillRoundedRect(18, 26, 8, 10, 4);    // arms
   g.fillRoundedRect(38, 26, 8, 10, 4);
 
-  // Legs
   g.fillStyle(0x1e1e1e, 1);
-  g.fillRoundedRect(25, 44, 8, 16, 3);
+  g.fillRoundedRect(25, 44, 8, 16, 3);                              // legs
   g.fillRoundedRect(31, 44, 8, 16, 3);
 
-  // Shoes
   g.fillStyle(0xffffff, 1);
-  g.fillRoundedRect(23, 57, 12, 6, 3);
+  g.fillRoundedRect(23, 57, 12, 6, 3);                              // shoes
   g.fillRoundedRect(29, 57, 12, 6, 3);
 
   g.generateTexture("person", w, h);
   g.destroy();
 }
 
-// --- Knife spawners ---
+/* -----------------------------
+   Knife spawners
+----------------------------- */
 function addSwingKnife(scene, pivotX, pivotY, length, speed, angleDeg) {
   const knifeSprite = scene.physics.add.sprite(pivotX, pivotY + length, "knife");
   knifeSprite.body.setAllowGravity(false);
@@ -249,11 +291,9 @@ function addSwingKnife(scene, pivotX, pivotY, length, speed, angleDeg) {
 }
 
 function addGroundKnife(scene, x, y) {
-  // A low knife that acts like a jump obstacle (static)
   const k = scene.physics.add.sprite(x, y, "knife");
   k.body.setAllowGravity(false);
   k.body.setImmovable(true);
-  k.setAngle(0);
   k.setScale(0.9);
   knives.push({ swing:false, body:k });
 }
