@@ -4,108 +4,282 @@
   <meta charset="utf-8" />
   <title>Swinging Knives</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+
   <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+
   <style>
-    body { margin:0; background:#000; touch-action:none; }
-    canvas { display:block; margin:0 auto; }
+    :root { --bg:#07070b; --panel:#0f1017; --btn:#1b1d2a; --btn2:#182a22; --txt:#f2f2f2; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--txt);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+    }
+
+    .wrap {
+      width: min(520px, 100vw);
+      padding: 10px 10px 16px;
+      box-sizing: border-box;
+    }
+
+    #game {
+      width: 100%;
+      background: #000;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 10px 30px rgba(0,0,0,.45);
+    }
+
+    /* Phaser injects the canvas inside #game */
+    #game canvas { display: block; width: 100% !important; height: auto !important; }
+
+    .controls {
+      margin-top: 12px;
+      background: var(--panel);
+      border-radius: 16px;
+      padding: 12px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+    }
+
+    .controls .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
+      align-items: center;
+    }
+
+    button.ctrl {
+      height: 64px;
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,.08);
+      background: var(--btn);
+      color: var(--txt);
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: .2px;
+      cursor: pointer;
+    }
+
+    button.ctrl:active { transform: translateY(1px); }
+
+    button.jump {
+      background: rgba(24, 255, 123, .14);
+      border-color: rgba(24, 255, 123, .25);
+    }
+
+    .hint {
+      margin-top: 10px;
+      font-size: 12px;
+      opacity: 0.8;
+      line-height: 1.35;
+    }
   </style>
 </head>
+
 <body>
+  <div class="wrap">
+    <div id="game"></div>
+
+    <!-- Mobile controls BELOW the game -->
+    <div class="controls">
+      <div class="row">
+        <button id="btnLeft" class="ctrl">◀︎ LEFT</button>
+        <button id="btnJump" class="ctrl jump">JUMP</button>
+        <button id="btnRight" class="ctrl">RIGHT ▶︎</button>
+      </div>
+      <div class="hint">
+        Mobile: hold LEFT/RIGHT to move • tap JUMP • Desktop: arrow keys.<br/>
+        If voice doesn’t play, tap any button once to “unlock” audio on your phone.
+      </div>
+    </div>
+  </div>
+
 <script>
-const W = 960, H = 540;
+/* =========================
+   GAME SETTINGS (portrait)
+========================= */
+const BASE_W = 360;
+const BASE_H = 520;
 
 const config = {
   type: Phaser.AUTO,
-  width: W,
-  height: H,
-  backgroundColor: "#0b0b0f",
+  parent: "game",
+  width: BASE_W,
+  height: BASE_H,
+  backgroundColor: "#07070b",
   scale: {
-    mode: Phaser.Scale.FIT,         // fits on mobile screens
+    mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH
   },
   physics: {
     default: "arcade",
-    arcade: { gravity: { y: 1100 }, debug: false }
+    arcade: {
+      gravity: { y: 1200 },
+      debug: false
+    }
   },
   scene: { preload, create, update }
 };
 
 new Phaser.Game(config);
 
-let player, ground, finish, cursors;
+/* =========================
+   STATE
+========================= */
+let player, ground, finish;
 let knives = [];
-let spawn = { x: 80, y: 390 };
+let cursors;
+
+const spawn = { x: 44, y: 400 };
 let canHit = true;
 
-// Touch state
+// HTML mobile input flags
 let touchLeft = false;
 let touchRight = false;
 let touchJump = false;
 
-function sayOhYeah() {
+// Speech unlock flag (mobile browsers often require a user gesture first)
+let speechUnlocked = false;
+
+/* =========================
+   SPEECH + TEXT POPUP
+========================= */
+function unlockSpeechOnce() {
+  if (speechUnlocked) return;
+  speechUnlocked = true;
+
+  // Some browsers require a "gesture-triggered" speak call once.
   try {
-    speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance("Oh yeah!");
-    u.rate = 1.0; u.pitch = 0.9; u.volume = 1.0;
-    speechSynthesis.speak(u);
-  } catch(e){}
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(" ");
+    u.volume = 0;
+    window.speechSynthesis.speak(u);
+  } catch (e) {}
 }
 
-function preload(){}
+function speakOhYeah() {
+  try {
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance("Oh yeah!");
+    u.rate = 1.0;
+    u.pitch = 0.9;
+    u.volume = 1.0;
+    window.speechSynthesis.speak(u);
+  } catch (e) {}
+}
+
+function showOhYeahText(scene) {
+  const text = scene.add.text(
+    player.x,
+    player.y - 56,
+    "Oh Yeah, Baby!",
+    {
+      fontFamily: "system-ui, Arial",
+      fontSize: "18px",
+      color: "#ffffff",
+      stroke: "#000000",
+      strokeThickness: 4
+    }
+  ).setOrigin(0.5).setDepth(1000);
+
+  // Bubble background (simple)
+  const padX = 10, padY = 6;
+  const w = text.width + padX * 2;
+  const h = text.height + padY * 2;
+
+  const bubble = scene.add.rectangle(text.x, text.y, w, h, 0x000000, 0.35)
+    .setOrigin(0.5)
+    .setDepth(999);
+
+  scene.tweens.add({
+    targets: [bubble, text],
+    y: "-=28",
+    alpha: 0,
+    duration: 900,
+    ease: "Cubic.easeOut",
+    onComplete: () => { bubble.destroy(); text.destroy(); }
+  });
+}
+
+function sayOhYeah(scene) {
+  // Try voice + show text
+  speakOhYeah();
+  showOhYeahText(scene);
+}
+
+/* =========================
+   PHASER LIFECYCLE
+========================= */
+function preload() {
+  // No external art needed; we generate textures in code.
+}
 
 function create() {
   cursors = this.input.keyboard.createCursorKeys();
 
+  // Generate textures
   generateKnifeTexture(this);
-  generatePersonTexture(this);
+  generateGirlTexture(this);
 
-  // Background speckles
+  // Background: subtle stars
   const bg = this.add.graphics();
-  for (let i=0;i<140;i++){
-    bg.fillStyle(0xffffff, Phaser.Math.FloatBetween(0.1, 0.5));
-    bg.fillCircle(Phaser.Math.Between(0, W), Phaser.Math.Between(0, H), Phaser.Math.Between(1,2));
+  for (let i = 0; i < 120; i++) {
+    const x = Phaser.Math.Between(0, BASE_W);
+    const y = Phaser.Math.Between(0, BASE_H);
+    const a = Phaser.Math.FloatBetween(0.08, 0.35);
+    bg.fillStyle(0xffffff, a);
+    bg.fillCircle(x, y, Phaser.Math.Between(1, 2));
   }
 
   // Ground
-  ground = this.add.rectangle(W/2, H-35, W, 70, 0x1e1e28);
+  ground = this.add.rectangle(BASE_W / 2, BASE_H - 28, BASE_W, 56, 0x11131c);
   this.physics.add.existing(ground, true);
 
-  // Finish
-  finish = this.add.rectangle(W-40, H-210, 18, 260, 0x18ff7b);
+  // Finish line
+  finish = this.add.rectangle(BASE_W - 22, BASE_H - 180, 12, 240, 0x18ff7b);
   this.physics.add.existing(finish, true);
 
-  // Player
-  player = this.physics.add.sprite(spawn.x, spawn.y, "person");
+  // Player (girl)
+  player = this.physics.add.sprite(spawn.x, spawn.y, "girl");
   player.setCollideWorldBounds(true);
-  player.body.setSize(22, 44).setOffset(21, 10);
+  // Slightly smaller collision box than the art
+  player.body.setSize(20, 44).setOffset(22, 12);
 
   this.physics.add.collider(player, ground);
 
-  // Knives
-  addSwingKnife(this, 300, 110, 120, 2.1, 55);
-  addSwingKnife(this, 520, 110, 160, 1.6, 70);
-  addSwingKnife(this, 730, 130, 120, 2.7, 60);
-  addGroundKnife(this, 610, H-70);
+  // Swinging knives (tight portrait layout)
+  addSwingKnife(this, 130, 95, 115, 2.4, 55);
+  addSwingKnife(this, 210, 95, 150, 1.6, 65);
+  addSwingKnife(this, 285, 110, 105, 2.9, 60);
+
+  // Ground knife (jump obstacle)
+  addGroundKnife(this, 230, BASE_H - 60);
 
   // Collisions
   knives.forEach(k => this.physics.add.overlap(player, k.body, () => hitPlayer(this)));
   this.physics.add.overlap(player, finish, () => win(this));
 
-  // HUD
-  this.add.text(12, 10, "Mobile: use on-screen buttons • Desktop: arrows",
-    { fontFamily:"system-ui, Arial", fontSize:"14px", color:"#eaeaea" });
+  // Small hint (inside game)
+  this.add.text(10, 10, "Avoid knives • Reach green line",
+    { fontFamily:"system-ui, Arial", fontSize:"12px", color:"#eaeaea" }).setAlpha(0.95);
 
-  // Create touch controls
-  createTouchControls(this);
+  // Hook HTML controls BELOW the canvas
+  hookMobileControls(this);
 
-  // store
+  // store knives for update
   this.knives = knives;
 }
 
 function update(time, deltaMs) {
-  const speed = 260;
+  const speed = 240;
 
-  // Desktop keyboard OR mobile touch
+  // Keyboard OR mobile buttons
   const left = cursors.left.isDown || touchLeft;
   const right = cursors.right.isDown || touchRight;
 
@@ -113,53 +287,57 @@ function update(time, deltaMs) {
   else if (right) player.setVelocityX(speed);
   else player.setVelocityX(0);
 
-  // Jump (tap)
-  const wantJump = (Phaser.Input.Keyboard.JustDown(cursors.up) || touchJump);
+  // Jump: one-shot on mobile tap
+  const wantJump = Phaser.Input.Keyboard.JustDown(cursors.up) || touchJump;
   if (wantJump && player.body.blocked.down) {
     player.setVelocityY(-560);
   }
-  // Reset one-tap jump so holding doesn't spam
   touchJump = false;
 
-  // Knife swing update
+  // Tiny run bob
+  if (Math.abs(player.body.velocity.x) > 10 && player.body.blocked.down) {
+    player.setScale(1, 1 + Math.sin(time / 70) * 0.02);
+  } else {
+    player.setScale(1, 1);
+  }
+
+  // Update swinging knives
   for (const k of this.knives) {
     if (!k.swing) continue;
+
     k.t += deltaMs / 1000;
 
     const ang = Math.sin(k.t * k.speed) * Phaser.Math.DegToRad(k.angleDeg);
     const x = k.px + Math.sin(ang) * k.len;
     const y = k.py + Math.cos(ang) * k.len;
 
+    // Chain
     k.chain.setTo(k.px, k.py, x, y);
     k.chainGfx.clear();
     k.chainGfx.lineStyle(2, 0x8f8f9a, 0.9);
     k.chainGfx.strokeLineShape(k.chain);
 
+    // Knife position + rotation
     k.body.setPosition(x, y);
     k.body.setRotation(ang);
   }
-
-  // little run bob
-  if (Math.abs(player.body.velocity.x) > 10 && player.body.blocked.down) {
-    player.setScale(1, 1 + Math.sin(time / 60) * 0.02);
-  } else {
-    player.setScale(1, 1);
-  }
 }
 
+/* =========================
+   GAME EVENTS
+========================= */
 function hitPlayer(scene) {
   if (!canHit) return;
   canHit = false;
 
-  // speech often needs user interaction on mobile:
-  // pressing buttons counts, so this should work after first tap
-  sayOhYeah();
+  // Voice + bubble
+  sayOhYeah(scene);
 
   scene.cameras.main.shake(120, 0.01);
 
   scene.time.delayedCall(220, () => {
     player.body.reset(spawn.x, spawn.y);
-    player.setVelocity(0,0);
+    player.setVelocity(0, 0);
     canHit = true;
   });
 }
@@ -167,105 +345,138 @@ function hitPlayer(scene) {
 function win(scene) {
   scene.physics.pause();
 
-  // SAY IT when you win
-  sayOhYeah();
+  // Voice + bubble on finish too
+  sayOhYeah(scene);
+  scene.time.delayedCall(350, () => sayOhYeah(scene));
 
-  // Extra polish: slight delay + second "Oh yeah!" for emphasis
-  scene.time.delayedCall(350, () => {
-    sayOhYeah();
-  });
+  scene.cameras.main.flash(220, 255, 255, 255);
 
-  scene.add.rectangle(W/2, H/2, 520, 170, 0x000000, 0.7);
-  scene.add.text(W/2, H/2 - 10, "YOU WIN",
-    { fontFamily:"system-ui, Arial", fontSize:"46px", color:"#ffffff" }).setOrigin(0.5);
-  scene.add.text(W/2, H/2 + 45, "Refresh to play again",
-    { fontFamily:"system-ui, Arial", fontSize:"16px", color:"#dddddd" }).setOrigin(0.5);
+  scene.add.rectangle(BASE_W/2, BASE_H/2, 300, 160, 0x000000, 0.7);
+  scene.add.text(BASE_W/2, BASE_H/2 - 18, "YOU WIN",
+    { fontFamily:"system-ui, Arial", fontSize:"36px", color:"#ffffff" }).setOrigin(0.5);
+  scene.add.text(BASE_W/2, BASE_H/2 + 34, "Refresh to play again",
+    { fontFamily:"system-ui, Arial", fontSize:"14px", color:"#dddddd" }).setOrigin(0.5);
 }
 
-/* -----------------------------
-   Touch Controls UI
------------------------------ */
-function createTouchControls(scene) {
-  // Big translucent buttons
-  const btnStyle = (label) => ({
-    fontFamily: "system-ui, Arial",
-    fontSize: "22px",
-    color: "#ffffff"
-  });
+/* =========================
+   HTML MOBILE CONTROLS (below)
+========================= */
+function hookMobileControls(scene) {
+  const btnLeft = document.getElementById("btnLeft");
+  const btnRight = document.getElementById("btnRight");
+  const btnJump = document.getElementById("btnJump");
 
-  // Left button
-  const leftBg = scene.add.rectangle(110, H-90, 180, 140, 0x000000, 0.35).setScrollFactor(0);
-  const leftTxt = scene.add.text(110, H-90, "LEFT", btnStyle()).setOrigin(0.5).setScrollFactor(0);
-
-  leftBg.setInteractive({ useHandCursor: true });
-  leftBg.on("pointerdown", () => { touchLeft = true; });
-  leftBg.on("pointerup", () => { touchLeft = false; });
-  leftBg.on("pointerout", () => { touchLeft = false; });
-
-  // Right button
-  const rightBg = scene.add.rectangle(320, H-90, 180, 140, 0x000000, 0.35).setScrollFactor(0);
-  const rightTxt = scene.add.text(320, H-90, "RIGHT", btnStyle()).setOrigin(0.5).setScrollFactor(0);
-
-  rightBg.setInteractive({ useHandCursor: true });
-  rightBg.on("pointerdown", () => { touchRight = true; });
-  rightBg.on("pointerup", () => { touchRight = false; });
-  rightBg.on("pointerout", () => { touchRight = false; });
-
-  // Jump button
-  const jumpBg = scene.add.rectangle(W-130, H-95, 220, 150, 0x00ff66, 0.22).setScrollFactor(0);
-  const jumpTxt = scene.add.text(W-130, H-95, "JUMP", btnStyle()).setOrigin(0.5).setScrollFactor(0);
-
-  jumpBg.setInteractive({ useHandCursor: true });
-  jumpBg.on("pointerdown", () => { touchJump = true; });
-
-  // Make sure multitouch works (left + jump, etc.)
+  // Multi-touch support: enable extra pointers in Phaser (not strictly needed for HTML buttons, but harmless)
   scene.input.addPointer(2);
+
+  // Helpers for "press and hold"
+  const press = (setterTrue) => (e) => { e.preventDefault(); unlockSpeechOnce(); setterTrue(true); };
+  const release = (setterFalse) => (e) => { e.preventDefault(); setterFalse(false); };
+
+  // Left
+  btnLeft.addEventListener("pointerdown", press(v => touchLeft = v));
+  btnLeft.addEventListener("pointerup", release(v => touchLeft = v));
+  btnLeft.addEventListener("pointercancel", release(v => touchLeft = v));
+  btnLeft.addEventListener("pointerleave", release(v => touchLeft = v));
+
+  // Right
+  btnRight.addEventListener("pointerdown", press(v => touchRight = v));
+  btnRight.addEventListener("pointerup", release(v => touchRight = v));
+  btnRight.addEventListener("pointercancel", release(v => touchRight = v));
+  btnRight.addEventListener("pointerleave", release(v => touchRight = v));
+
+  // Jump (tap)
+  btnJump.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    unlockSpeechOnce();
+    touchJump = true; // one-shot (update() resets it)
+  });
 }
 
-/* -----------------------------
-   Generated textures
------------------------------ */
+/* =========================
+   TEXTURE GENERATION
+========================= */
 function generateKnifeTexture(scene) {
   const g = scene.make.graphics({ x:0, y:0, add:false });
-  const w = 90, h = 26;
+  const w = 92, h = 28;
 
-  g.fillStyle(0x2d2d2d, 1); g.fillRoundedRect(4, 8, 20, 10, 4);     // handle
-  g.fillStyle(0x8a6f3d, 1); g.fillRoundedRect(22, 6, 6, 14, 3);     // guard
+  // Handle
+  g.fillStyle(0x2d2d2d, 1);
+  g.fillRoundedRect(6, 9, 20, 10, 4);
 
+  // Guard
+  g.fillStyle(0x8a6f3d, 1);
+  g.fillRoundedRect(26, 7, 6, 14, 3);
+
+  // Blade
   g.fillStyle(0xd7dbe2, 1);
-  g.beginPath(); g.moveTo(28, 6); g.lineTo(84, 13); g.lineTo(28, 20); g.closePath(); g.fillPath();
+  g.beginPath();
+  g.moveTo(32, 7);
+  g.lineTo(88, 14);
+  g.lineTo(32, 21);
+  g.closePath();
+  g.fillPath();
 
+  // Blade highlight
   g.lineStyle(2, 0xffffff, 0.35);
-  g.beginPath(); g.moveTo(30, 7); g.lineTo(82, 13); g.lineTo(30, 19); g.strokePath();
+  g.beginPath();
+  g.moveTo(34, 8);
+  g.lineTo(86, 14);
+  g.lineTo(34, 20);
+  g.strokePath();
 
   g.generateTexture("knife", w, h);
   g.destroy();
 }
 
-function generatePersonTexture(scene) {
+function generateGirlTexture(scene) {
   const g = scene.make.graphics({ x:0, y:0, add:false });
   const w = 64, h = 64;
 
-  g.fillStyle(0xf1c27d, 1); g.fillCircle(32, 14, 9);               // head
-  g.fillStyle(0x3ea1ff, 1); g.fillRoundedRect(24, 24, 16, 20, 6);   // shirt
-  g.fillStyle(0xf1c27d, 1); g.fillRoundedRect(18, 26, 8, 10, 4);    // arms
-  g.fillRoundedRect(38, 26, 8, 10, 4);
+  // Hair (long, behind head)
+  g.fillStyle(0x4b2e1e, 1);
+  g.fillRoundedRect(18, 6, 28, 34, 12);
 
+  // Head
+  g.fillStyle(0xf1c27d, 1);
+  g.fillCircle(32, 18, 9);
+
+  // Hair front strands
+  g.fillStyle(0x4b2e1e, 1);
+  g.fillRoundedRect(22, 10, 6, 22, 4);
+  g.fillRoundedRect(36, 10, 6, 22, 4);
+
+  // Shirt / torso
+  g.fillStyle(0xe86aa3, 1);
+  g.fillRoundedRect(22, 30, 20, 18, 8);
+
+  // Subtle chest curve (cartoon, non-sexual)
+  g.fillStyle(0xd95f96, 1);
+  g.fillCircle(28, 37, 4);
+  g.fillCircle(36, 37, 4);
+
+  // Arms
+  g.fillStyle(0xf1c27d, 1);
+  g.fillRoundedRect(16, 32, 6, 12, 4);
+  g.fillRoundedRect(42, 32, 6, 12, 4);
+
+  // Legs
   g.fillStyle(0x1e1e1e, 1);
-  g.fillRoundedRect(25, 44, 8, 16, 3);                              // legs
-  g.fillRoundedRect(31, 44, 8, 16, 3);
+  g.fillRoundedRect(25, 48, 6, 14, 3);
+  g.fillRoundedRect(33, 48, 6, 14, 3);
 
+  // Shoes
   g.fillStyle(0xffffff, 1);
-  g.fillRoundedRect(23, 57, 12, 6, 3);                              // shoes
-  g.fillRoundedRect(29, 57, 12, 6, 3);
+  g.fillRoundedRect(23, 60, 10, 4, 2);
+  g.fillRoundedRect(31, 60, 10, 4, 2);
 
-  g.generateTexture("person", w, h);
+  g.generateTexture("girl", w, h);
   g.destroy();
 }
 
-/* -----------------------------
-   Knife spawners
------------------------------ */
+/* =========================
+   KNIFE SPAWNERS
+========================= */
 function addSwingKnife(scene, pivotX, pivotY, length, speed, angleDeg) {
   const knifeSprite = scene.physics.add.sprite(pivotX, pivotY + length, "knife");
   knifeSprite.body.setAllowGravity(false);
